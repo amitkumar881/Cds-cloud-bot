@@ -6,15 +6,17 @@ import os
 # ==========================================
 # 1. GET KEYS FROM CLOUD VAULT (Secrets)
 # ==========================================
-GEMINI_KEY = os.environ["GEMINI_KEY"]
-BOT_TOKEN  = os.environ["BOT_TOKEN"]
-CHANNEL_ID = os.environ["CHANNEL_ID"]
+GEMINI_KEY = os.environ.get("GEMINI_KEY")
+BOT_TOKEN  = os.environ.get("BOT_TOKEN")
+CHANNEL_ID = os.environ.get("CHANNEL_ID")
 
 # ==========================================
 # 2. THE BRAIN (Gemini)
 # ==========================================
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash-lite-preview-09-2025")
+
+# *** UPDATED: Using the Stable 1.5 Flash Model to fix Error 429 ***
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 def generate_exam():
     print("1. Asking Gemini to create the CDS 2025 paper...")
@@ -36,6 +38,11 @@ def generate_exam():
     """
     try:
         response = model.generate_content(prompt)
+        # Check if text is empty
+        if not response.text:
+            print("❌ Error: Gemini returned empty text.")
+            return None
+        # Clean text
         return response.text.replace("**", "").replace("*", "").replace("#", "")
     except Exception as e:
         print(f"Gemini Error: {e}")
@@ -54,6 +61,7 @@ def create_pdf(text):
     pdf.ln(10)
     pdf.set_font("Arial", size=11)
     
+    # Fix encoding to prevent crashes
     safe_text = text.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 8, txt=safe_text)
     
@@ -71,12 +79,20 @@ def send_pdf(filename):
     with open(filename, 'rb') as f:
         payload = {"chat_id": CHANNEL_ID, "caption": "🔥 **Daily CDS 2025 Practice Set**"}
         files = {"document": f}
-        requests.post(url, data=payload, files=files)
-        print("🚀 SUCCESS! PDF Sent.")
+        
+        # We capture the response to see if Telegram accepts it
+        resp = requests.post(url, data=payload, files=files)
+        
+        if resp.status_code == 200:
+            print("🚀 SUCCESS! PDF Sent.")
+        else:
+            print(f"❌ Telegram Error: {resp.text}")
 
 if __name__ == "__main__":
     text = generate_exam()
     if text:
         pdf = create_pdf(text)
         send_pdf(pdf)
-      
+    else:
+        print("Stopping because AI generation failed.")
+        
