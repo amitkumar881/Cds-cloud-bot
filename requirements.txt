@@ -2,4 +2,4 @@ google-generativeai
 requests
 fpdf
 pytz
-yt-dlp
+youtube-transcript-api
