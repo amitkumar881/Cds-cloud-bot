@@ -1,0 +1,33 @@
+name: Video Notes Bot
+
+on:
+  push:
+    paths:
+      - 'video_link.txt'  # Runs ONLY when you change the link
+  workflow_dispatch:      # Runs when you click the button manually
+
+jobs:
+  run-video-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install FFmpeg (Required for Video)
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Install Tools
+        run: pip install -r requirements.txt
+
+      - name: Run Lecture Bot
+        env:
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+        run: python cloud_lecture_bot.py
+        
