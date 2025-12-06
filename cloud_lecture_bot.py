@@ -1,106 +1,125 @@
 import google.generativeai as genai
-import yt_dlp
 import requests
 from fpdf import FPDF
+from youtube_transcript_api import YouTubeTranscriptApi
 import os
-import time
 
 # ==========================================
-# 1. SETUP KEYS & INPUT
+# 1. CONFIGURATION
 # ==========================================
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 BOT_TOKEN  = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID")
 
-# Read the link from the file
-try:
-    with open("video_link.txt", "r") as f:
-        YOUTUBE_URL = f.read().strip()
-except FileNotFoundError:
-    print("❌ Error: video_link.txt not found!")
-    exit(1)
-
-print(f"🎯 Target Video: {YOUTUBE_URL}")
+# --- PASTE THE LECTURE LINK HERE ---
+YOUTUBE_URL = "https://www.youtube.com/watch?v=Hu4Yvq-g7_Y" 
+# NOTE: Replace with your actual lecture link for testing!
 
 # ==========================================
-# 2. THE BRAIN (Gemini 2.5 Lite)
+# 2. THE LISTENER (Transcript API)
 # ==========================================
-genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash-lite-preview-09-2025")
+def get_video_id(url):
+    """Extracts the video ID from the URL."""
+    if "v=" in url: return url.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in url: return url.split("youtu.be/")[1]
+    return None
 
-def download_lecture(url):
-    print("1. Downloading video...")
-    filename = "lecture_vid.mp4"
-    # Download tiny version to save speed
-    ydl_opts = {'format': 'worst[ext=mp4]', 'outtmpl': filename, 'quiet': True}
-    
+def get_transcript(url):
+    print("1. Extracting text from YouTube Transcript API...")
+    video_id = get_video_id(url)
+    if not video_id: 
+        print("❌ Error: Invalid YouTube URL")
+        return None
+        
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        print("✅ Download Complete.")
-        return filename
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        full_text = " ".join([line['text'] for line in transcript_list])
+        print(f"✅ Transcript Extracted! ({len(full_text)} characters)")
+        return full_text
     except Exception as e:
-        print(f"❌ Download Failed: {e}")
+        print(f"❌ Error: Transcript API Failed. {e}")
         return None
 
-def analyze_lecture(video_path):
-    print("2. Uploading to Gemini...")
-    video_file = genai.upload_file(path=video_path)
-    
-    # Wait for processing
-    while video_file.state.name == "PROCESSING":
-        time.sleep(5)
-        video_file = genai.get_file(video_file.name)
+# ==========================================
+# 3. THE BRAIN (Structure Generator)
+# ==========================================
+genai.configure(api_key=GEMINI_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash") # The stable model
 
-    print("3. Generating Notes...")
-    prompt = """
-    You are an expert student taking notes.
-    Task: Create a detailed 'Lecture Revision Sheet' from this video.
+def generate_notes(video_text):
+    print("2. Generating Structured Notes...")
     
-    Instructions:
-    - Capture every formula, diagram label, and definition written on the board.
-    - Summarize the teacher's spoken explanations.
-    - Organize with clear Headings.
+    # This prompt forces the AI to structure the content, making it look like notes
+    prompt = f"""
+    You are an expert student taking revision notes for the UPSC CDS exam.
+    TASK: Convert the following raw lecture transcript into a highly structured, dense study guide.
+    
+    CRITICAL INSTRUCTIONS:
+    1. Organize the content using **Headings** (bold text).
+    2. Use **Bullet Points** extensively for key facts and lists.
+    3. Extract and present **Formulas or Definitions** clearly on separate lines.
+    4. Ensure the output is optimized for PDF reading (plain text, no complex markdown).
+    
+    TRANSCRIPT:
+    {video_text}
     """
     
     try:
-        response = model.generate_content([video_file, prompt])
-        return response.text.replace("**", "").replace("*", "").replace("#", "")
+        response = model.generate_content(prompt)
+        # Clean text for PDF compatibility
+        return response.text.replace("**", "").replace("*", "").replace("#", "") 
     except Exception as e:
         print(f"❌ Gemini Error: {e}")
         return None
 
+# ==========================================
+# 4. PDF & TELEGRAM
+# ==========================================
 def create_pdf(text):
-    print("4. Creating PDF...")
+    print("3. Formatting PDF...")
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font("Arial", style='B', size=16)
-    pdf.cell(200, 10, txt="Daily Lecture Notes", ln=True, align='C')
+    pdf.cell(200, 10, txt="CDS Detailed Revision Notes", ln=True, align='C')
     pdf.ln(10)
     pdf.set_font("Arial", size=11)
     
     safe_text = text.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 7, txt=safe_text)
     
-    filename = "Lecture_Notes.pdf"
+    filename = "Structured_Notes.pdf"
     pdf.output(filename)
     return filename
 
 def send_pdf(filename):
-    print("5. Sending to Telegram...")
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    print("4. Sending to Telegram...")
+    url = f"https://api.telegram.org/bot{os.environ.get('BOT_TOKEN')}/sendDocument"
+    
     with open(filename, 'rb') as f:
-        payload = {"chat_id": CHANNEL_ID, "caption": f"🔥 **Notes for:** {YOUTUBE_URL}"}
+        payload = {"chat_id": os.environ.get("CHANNEL_ID"), "caption": f"🔥 **Structured Notes for Today's Lecture**\nLink: {YOUTUBE_URL}"}
         files = {"document": f}
         requests.post(url, data=payload, files=files)
         print("🚀 SUCCESS! PDF Sent.")
 
+# ==========================================
+# 5. EXECUTION
+# ==========================================
 if __name__ == "__main__":
-    vid = download_lecture(YOUTUBE_URL)
-    if vid:
-        notes = analyze_lecture(vid)
+    # Check if we're running locally or on Cloud
+    if "PASTE_YOUR_GEMINI_KEY_HERE" in GEMINI_KEY:
+        print("🛑 ERROR: Please update GEMINI_KEY with your actual key!")
+        exit()
+
+    # 1. Get Text
+    lecture_text = get_transcript(YOUTUBE_URL)
+    
+    if lecture_text:
+        # 2. Generate Notes
+        notes = generate_notes(lecture_text)
+        
         if notes:
-            pdf = create_pdf(notes)
-            send_pdf(pdf)
-          
+            # 3. Create & Send PDF
+            pdf_file = create_pdf(notes)
+            send_pdf(pdf_file)
+            
